@@ -36,6 +36,8 @@ flowchart LR
 
 Harness 只生成治理规则、Prompt、OpenSpec 制品、状态、证据和辅助脚本。它不会创建 `src/`、`include/`、`tests/` 等业务目录，不会自动修改业务源码，也不会把 Generator、Evaluator 或验证脚本链接进产品。
 
+项目内置 `minimal-implementation` Skill，用于减少功能代码中的重复校验、无实际职责的包装和冗余状态。它贯穿规划、实现收尾和独立代码质量审查，保留必要行为、错误处理及资源管理。
+
 ## 快速开始
 
 ### 环境要求
@@ -95,6 +97,19 @@ init . --tools none --profile core
 ```
 
 已有兼容的 `spec-driven` OpenSpec 项目只做兼容检查并补充 AutoAI 模板，不会重复初始化，也不会覆盖已有 specs、change 或 evidence。
+
+初始化同时生成项目内的 `minimal-implementation` Skill，无需单独安装。两个入口由同一模板生成，内容一致：
+
+- `.agents/skills/minimal-implementation/SKILL.md`：AGENTS 和三个角色 Prompt 的读取入口。
+- `.claude/skills/minimal-implementation/SKILL.md`：CLAUDE 的读取入口。
+
+更新已有项目时，从目标 Git 仓库根目录运行：
+
+```bash
+bash /path/to/AutoAI-Coding/setup_ai_harness.sh --force
+```
+
+该流程先备份再更新受管模板。未受管同名文件存在冲突时会报告问题，由用户核对处理；安装只作用于目标项目，不检查全局 Skill 或下载网络版 Skill。
 
 ### 3. 检查项目就绪状态
 
@@ -622,6 +637,8 @@ Project Profile、Campaign、project index、context slice、surface report 和 
 ├── PROJECT_ATTRIBUTION.md
 ├── AGENTS.md
 ├── CLAUDE.md
+├── .agents/skills/minimal-implementation/SKILL.md
+├── .claude/skills/minimal-implementation/SKILL.md
 ├── ai_snapshot.json
 ├── .ai-harness/
 │   ├── project-profile.json
@@ -754,6 +771,18 @@ Harness 不给所有项目套一个固定行数上限。小组件和大型系统
 - “以后可能会用”不是新增抽象、接口或框架的理由。
 
 预算是规划和审查阈值，不是代码质量评分，也不是跨项目统一的硬 LOC 限制。合法的大型 change 可以在审核后提高预算；Generator 不能自行提高。
+
+### minimal-implementation：最小必要实现
+
+Skill 用于判断当前实现是否有不必要的复杂度：重复校验、无实际职责的包装、可推导的重复状态，以及没有当前用途的抽象、配置和兼容分支。优先复用已有实现，同时保留必要的输入验证、错误处理、资源管理和仍有真实消费者的兼容行为。
+
+Planner 调查复用机会及新增结构的必要性；Generator 在实现收尾时完成有依据的删除审查；Evaluator 在现有 `code_quality` 阶段独立复核。详细规则保留在生成的 `SKILL.md` 中。
+
+审查复用现有 findings 和唯一 Evaluation verdict。重要问题未解决时阻止 Pass，纯风格偏好不构成硬阻断；不以行数或删除比例判断冗余，没有冗余的改动无需强制重构。Implementation Economy 管理改动预算，Skill 帮助判断具体实现是否必要。
+
+初始化检查完整工作流契约；恢复会话、规划冻结、任务验证与完成、Evaluation 和归档关键入口在执行或写证据前检查 Skill 文件、受管记录、双入口一致性及角色引用。检查失败返回退出码 `6`，可用 `./scripts/harness_doctor.sh` 或 `./scripts/workflow_contract_check.sh` 定位问题，再通过原初始化脚本修复；已有受管模板按前述 `--force` 流程备份更新。日常命令不会自动重装 Skill。
+
+帮助、只读探测、状态诊断、Evaluation 中止和归档恢复入口保持可用，恢复仍须满足既有条件。安装检查只能确认文件和引用有效，不能证明模型已阅读规则或代码没有冗余。旧变更及归档证据不会补写 Skill 审查，历史复核仍遵守原有 manifest 和源码、规划指纹检查。
 
 ### 功能闭环与接口可达性
 

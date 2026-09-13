@@ -1593,6 +1593,7 @@ preflight_managed_paths() {
         .ai-harness .ai-harness/locks .ai-harness/logs .ai-harness/migrations .ai-harness/derived \
         .ai-harness/campaigns .ai-harness/ci-profiles \
         scripts docs docs/ai prompts .claude .claude/skills .claude/skills/full-code-review \
+        .agents .agents/skills .agents/skills/minimal-implementation .claude/skills/minimal-implementation \
         .codex .codex/skills .codex/skills/full-code-review .codex/skills/full-code-review/agents \
         openspec openspec/specs openspec/changes openspec/changes/archive; do
         [ ! -e "$path" ] || [ -d "$path" ] || die 4 "期望目录但检测到其他类型: $path"
@@ -1605,6 +1606,7 @@ preflight_managed_paths() {
         .ai-harness/organization-policy.json openspec/config.yaml \
         .claude/settings.json \
         .claude/skills/full-code-review/SKILL.md \
+        .agents/skills/minimal-implementation/SKILL.md .claude/skills/minimal-implementation/SKILL.md \
         .codex/skills/full-code-review/SKILL.md \
         .codex/skills/full-code-review/agents/openai.yaml \
         docs/ai/openspec.md docs/ai/implementation-economy.md docs/ai/workflow.md \
@@ -1629,6 +1631,25 @@ preflight_managed_paths() {
         scripts/quick_brief_check.sh scripts/rca_new.sh scripts/ai_debt_scan.sh; do
         [ ! -e "$path" ] || [ -f "$path" ] || die 4 "期望普通文件但检测到其他类型: $path"
         preflight_writable_path "$path"
+    done
+    preflight_minimal_implementation_file_claims
+}
+
+preflight_minimal_implementation_file_claims() {
+    local path
+    for path in .agents/skills/minimal-implementation/SKILL.md .claude/skills/minimal-implementation/SKILL.md; do
+        [ -e "$path" ] || [ -L "$path" ] || continue
+        if [ -f .ai-harness/manifest.json ] && node - "$path" <<'NODE'
+const fs=require('fs'),target=process.argv[2],d=JSON.parse(fs.readFileSync('.ai-harness/manifest.json','utf8'));
+if(d.schema_version!==2||!d.managed_paths.some(x=>x.path===target&&x.ownership==='template'&&x.template_version===2))process.exit(1);
+NODE
+        then
+            continue
+        fi
+        [ -f "$path" ] && [ ! -L "$path" ] && \
+            [ "$(stat -c '%a' -- "$path" 2>/dev/null || true)" = 644 ] && \
+            cmp -s -- "$path" <(minimal_implementation_skill_content) || \
+            die 4 "未受管的 minimal-implementation 同名文件冲突: $path；请先保留并移开该文件，--force 不会接管"
     done
 }
 
@@ -1765,6 +1786,12 @@ NODE
                                 [ "$(stat -c '%a' -- "$upgrade_path" 2>/dev/null || true)" = 644 ] && \
                                 cmp -s -- "$upgrade_path" <(project_attribution_content) || \
                                 die 4 "旧 manifest 不拥有新增署名路径，且同名文件不匹配可信中断恢复模板: $upgrade_path"
+                            ;;
+                        .agents/skills/minimal-implementation/SKILL.md|.claude/skills/minimal-implementation/SKILL.md)
+                            [ -f "$upgrade_path" ] && [ ! -L "$upgrade_path" ] && \
+                                [ "$(stat -c '%a' -- "$upgrade_path" 2>/dev/null || true)" = 644 ] && \
+                                cmp -s -- "$upgrade_path" <(minimal_implementation_skill_content) || \
+                                die 4 "旧 manifest 不拥有新增 Skill 路径，且同名文件不匹配可信中断恢复模板: $upgrade_path"
                             ;;
                         scripts/attribution_check.sh)
                             [ -f "$upgrade_path" ] && [ ! -L "$upgrade_path" ] && \
@@ -2015,6 +2042,7 @@ const [generatedAt,harnessVersion]=process.argv.slice(2);
 const templates=[
   'PROJECT_ATTRIBUTION.md','CLAUDE.md','AGENTS.md','init.sh','.cursorrules',
   '.claude/settings.json','.claude/skills/full-code-review/SKILL.md',
+  '.agents/skills/minimal-implementation/SKILL.md','.claude/skills/minimal-implementation/SKILL.md',
   '.codex/skills/full-code-review/SKILL.md','.codex/skills/full-code-review/agents/openai.yaml',
   'docs/ai/openspec.md','docs/ai/implementation-economy.md','docs/ai/workflow.md',
   'docs/ai/evaluation.md','docs/ai/check-rules.md','docs/ai/quick-brief.md',
@@ -2082,14 +2110,199 @@ NODE
     )
 }
 
+minimal_implementation_skill_content() {
+    cat <<'EOF'
+---
+name: minimal-implementation
+description: 在实现、修改或审查功能代码时，减少无当前用途的抽象、重复校验、冗余状态和过时路径。适用于控制实现复杂度及精简代码；不主动扩展为全仓库重构。
+---
+
+# 最小必要实现
+
+实现已确认的需求，同时减少需要理解和维护的分支、状态、
+抽象层与依赖。保持正确性、可读性和项目已有契约。
+
+默认选择满足需求的最小实现。新增复杂度必须有当前用途，
+“以后可能用到”“保险起见”不能单独成为新增代码的理由。
+用户明确要求优先。精简不得扩大任务范围或改变未经批准的行为。
+
+## 实现选择顺序
+
+先读受影响代码，追踪实际入口、调用方、相关类型和数据流，
+明确所需行为，再按以下顺序选择方案：
+
+1. 不新增代码：现有行为已经满足需求，或删除多余步骤即可满足。
+2. 复用或修改仓库已有实现。
+3. 使用标准库。
+4. 使用平台原生能力。
+5. 使用项目已有依赖。
+6. 编写直接、清楚的表达式或局部函数。
+7. 前述方案不足时，再增加必要的自定义结构。
+
+找到满足契约、运行环境及性能要求的方案就停止继续设计。
+复用不得遗漏必要行为；不要为短小逻辑引入新依赖或额外适配层。
+这一顺序用于快速决策，不要求穷举工具或制作方案比较报告。
+
+## 如何判断冗余
+
+以下内容是审查候选，需要结合调用方和行为契约判断：
+
+- 上游已经可靠保证、下游又重复执行的检查。
+- 仅转发参数，没有实际隔离职责或简化调用的包装层。
+- 可以从已有状态推导，却另行保存和同步的数据。
+- 没有当前需求或消费者的扩展点、配置项和通用框架。
+- 新实现已经替代，但仍残留的旧分支、参数和辅助函数。
+- 无恢复能力却重复捕获、记录或转换的错误处理。
+- 同一业务规则在多个位置重复实现。
+
+行数、函数数量、命名或调用次数不能单独证明冗余。
+
+## 实现规则
+
+### 1. 删除优先，修复共同根因
+
+增加分支或包装前，先检查能否删除多余步骤、合并路径，
+或用已有能力替换整段实现。删除审查同时用于实现前和收尾。
+
+修复问题前搜索相关函数的全部调用方，区分症状和共同根因。
+共同问题在正确的共享位置修复，避免给每个调用方分别加补丁；
+调用方契约不同的，不强行合并处理。
+
+### 2. 直接实现，延迟抽象
+
+简单逻辑优先表达式或函数，不预先设计框架。
+默认不新增单实现接口、单产品工厂、纯转发包装和预留扩展点。
+新增抽象必须解决当前的职责隔离、资源所有权、重复逻辑或变化需求。
+现存结构也按实际职责判断，不能仅凭实现数或调用数删除。
+
+优先在现有合适模块完成修改，减少新增文件和调用层级。
+不为形式完整拆出接口、实现、工厂、管理器及对应目录。
+标准库调用或简单表达式能够完整表达行为时，直接使用；
+不要仅为未来替换再包一层透传函数。
+
+行为等价且同样清楚时，选择更短的实现和更少的文件。
+不要为了少写几行，把清晰代码压缩成复杂表达式。
+少量相似代码若语义不同，不要强行抽成统一框架。
+
+### 3. 在明确边界处理失败
+
+外部输入、公共接口、I/O 和资源操作应处理真实可能的失败。
+内部已由类型或可靠前置条件保证的不变量，避免逐层重复检查。
+
+新增检查、重试或降级前，明确失败从哪里发生、这一层如何处理，
+以及该处理能保持或恢复什么行为。没有具体失败依据时不新增。
+删除检查前，确认所有相关调用方及状态变化均满足前置条件。
+不要把外部输入验证换成仅在调试模式生效的断言。
+
+不要用静默默认值、空返回或无依据的重试隐藏错误。
+按项目约定，在合适的一层返回、传播或处理失败。
+
+### 4. 减少独立状态
+
+同一事实尽量只保留一个权威来源。
+优先推导数据，避免同步多个布尔标志、计数器或状态副本。
+新增独立状态前，明确为什么不能可靠或经济地从已有数据推导。
+
+默认采用直接算法，不顺手增加缓存、线程池、异步队列或多级索引。
+这些结构需要当前行为要求、性能或资源目标、数据规模依据，
+或测量结果支持；不要求已有明确约束的优化必须先拿到 profiler 数据。
+必要的缓存和额外状态应明确失效条件和维护责任。
+
+C++ 资源管理优先遵循项目已有的 RAII 和所有权约定，
+避免在多条分支中重复清理资源。
+
+### 5. 按实际消费者增加配置和兼容
+
+没有实际使用者需要改变的内部取值，优先使用局部常量或直接表达。
+不为固定行为同时增加配置文件、环境变量、命令行参数和解析逻辑。
+部署差异、凭据、真实硬件校准及用户明确要求的配置仍按现有契约处理。
+
+不顺手增加未要求的兼容模式、降级路径或扩展能力。
+必要的兼容逻辑必须对应仍受支持的消费者。
+
+替换实现后检查旧路径及其调用方。
+在当前范围内连同失去用途的参数、注册逻辑、包装和配置一起清理，
+避免只替换主体而留下整条空路径。仍需保留的部分说明具体原因。
+
+### 6. 为真实取舍标明升级条件
+
+简单方案存在已知适用上限时，在相关位置简短注明限制和升级触发条件。
+例如：当前集合很小，使用线性扫描；查询成为瓶颈时再增加索引。
+不要因此提前实现备用方案，也不要为普通实现逐函数添加说明。
+沿用项目注释约定，不要求专用标记、独立债务台账或额外报告。
+
+## 实现时的执行方式
+
+1. 明确本次行为变化及必须保持的契约。
+2. 追踪调用关系，按实现选择顺序检查删除、复用和直接实现的机会。
+3. 完成当前需求所需的实现。
+4. 对本次新增和修改部分进行删除审查，实际完成有依据的删除或替换。
+5. 使用适当的现有构建、测试或真实调用验证精简结果。
+
+纯改名或机械调整不必为了本 Skill 制造额外重构。
+新增验证代码应针对实际覆盖缺口，并遵守项目已有验证要求。
+
+## 删除审查
+
+逐项检查：
+
+- 这个分支对应什么需求或实际故障？
+- 能否删除整个步骤，或用已有实现、标准库、平台能力替换？
+- 这个校验是否已由可信入口或类型保证？
+- 这个抽象、文件或调用层级承担了什么当前职责？
+- 这个状态是否能够可靠推导？
+- 这个配置是否有人使用，性能结构是否有当前依据？
+- 这个兼容路径是否仍有受支持的消费者？
+- 删除或合并后，什么明确行为可能受到影响？
+
+给出具体的更小实现；可以是直接调用、合并逻辑，也可以无需替代。
+能证明不影响所需行为的，实际删除、合并或替换，并清理连带旧路径。
+存在具体必要性的，保留。
+证据不足的，不盲目删除，也不凭猜测增加防御代码。
+
+## 独立审查时
+
+结合完整变更、调用方和行为契约判断，不能只看局部代码。
+只读审查不修改实现。
+
+报告问题时说明：
+
+- 具体位置；
+- 冗余的依据；
+- 具体删除对象与替代 API 或实现；无需替代时明确直接删除；
+- 需要保持或验证的行为。
+
+避免只说“可以更简洁”。建议必须能让实现者直接定位并落实修改。
+区分有证据的问题和可选风格建议。
+不要求实现者为了审查偏好引入新的包装、配置或框架。
+
+沿用项目已有的审查结果和问题记录格式，
+不额外生成一套报告或最终判定。
+
+## 完成标准
+
+- 所需行为及必要的错误处理仍然完整。
+- 没有发现无依据的新增分支、抽象或状态。
+- 已落实有依据的精简机会，而非只提出建议后保留多余实现。
+- 相关旧路径已经处理或说明保留原因。
+- 精简后的实现更容易理解和维护。
+- 验证与实际改动风险相称。
+
+没有发现值得精简的问题，也是有效结果。
+不要求每次都删除代码，不设置删除数量或行数比例。
+EOF
+}
+
 write_governance_templates() {
     template_write PROJECT_ATTRIBUTION.md 644 < <(project_attribution_content)
+    template_write .agents/skills/minimal-implementation/SKILL.md 644 < <(minimal_implementation_skill_content)
+    template_write .claude/skills/minimal-implementation/SKILL.md 644 < <(minimal_implementation_skill_content)
 
     template_write CLAUDE.md 644 <<'EOF'
 # AI Engineering Harness
 
 <!-- autoai:workflow-binding:v1
-{"role":"control","facts":["openspec-only-planning","single-active-selector","single-evaluator-verdict","project-profile-command-ids"]}
+{"role":"control","facts":["openspec-only-planning","single-active-selector","single-evaluator-verdict","project-profile-command-ids","minimal-implementation-skill"]}
 -->
 
 <!-- autoai:project-attribution:v1 -->
@@ -2108,6 +2321,7 @@ write_governance_templates() {
 - OpenSpec is the only source of truth for proposals, behavior specs, design and tasks.
 - The root `ai_snapshot.json` is the only active-change selector.
 - Read `docs/ai/openspec.md`, `docs/ai/workflow.md` and `docs/ai/testing.md` before changing behavior.
+- Read and apply `.claude/skills/minimal-implementation/SKILL.md` for planning, implementation and independent code-quality review; follow the responsibilities in the relevant role prompt.
 - Read `docs/ai/rca.md` before repairing an unexpected failure or repeating a fix.
 - Use only `scripts/openspec_cli.sh` for AutoAI-managed OpenSpec commands.
 
@@ -2141,7 +2355,7 @@ EOF
 # Agent operating contract
 
 <!-- autoai:workflow-binding:v1
-{"role":"control","facts":["generator-direct-evidence","evaluator-independent-evidence","single-evaluator-verdict","project-profile-command-ids"]}
+{"role":"control","facts":["generator-direct-evidence","evaluator-independent-evidence","single-evaluator-verdict","project-profile-command-ids","minimal-implementation-skill"]}
 -->
 
 <!-- autoai:project-attribution:v1 -->
@@ -2160,6 +2374,8 @@ Start every implementation or evaluation session with:
 1. `scripts/resume_from_snapshot.sh`
 2. the active change's proposal, design, delta specs and tasks
 3. the relevant role prompt under `prompts/`
+
+Read and apply `.agents/skills/minimal-implementation/SKILL.md` for planning, implementation and independent code-quality review. The Skill owns the detailed simplification rules; the role prompts define who investigates, implements and reviews them.
 
 OpenSpec artifacts own intent; change-local `harness/` owns execution evidence. The root snapshot selects one active change but never replaces CLI status or task instructions. Multiple unarchived changes are allowed; never guess an active change.
 
@@ -2291,6 +2507,12 @@ EOF
 -->
 
 quick_brief: Plan every product surface and real consumer in OpenSpec, bind Generator and Evaluator commands to it, reject unmatched candidates, and archive only a fresh unified Pass.
+
+The project-local `minimal-implementation` Skill is generated from one source at `.agents/skills/minimal-implementation/SKILL.md` and `.claude/skills/minimal-implementation/SKILL.md`. AGENTS and the three role prompts use the first path; CLAUDE uses the second. Planner investigates reuse and current implementation needs, Generator performs the deletion review, and Evaluator applies the same rules independently in the existing `code_quality` stage. Read the Skill for the detailed rules.
+
+Initialization checks the complete workflow contract. Resume, planning freeze, task command/completion, Evaluation begin/run/finish and archive check the local Skill installation and role bindings before execution or evidence writes. Missing files, changed hashes or missing references stop those operations with exit code 6. Use `scripts/harness_doctor.sh` and `scripts/workflow_contract_check.sh` to inspect the problem, then rerun the original setup script from the target root; updating existing managed templates requires its explicit `--force` flow and backup. Review and resolve an unmanaged same-name conflict yourself before retrying: it is never overwritten or claimed automatically. Ordinary commands do not reinstall the Skill, and setup does not inspect global Skill directories or download Skill updates.
+
+Help, read-only project detection, status diagnosis, Evaluation abort and archive recovery remain available when the Skill is invalid. Installation checks establish file and reference integrity; neither hashes nor bindings prove that a model read the Skill or that implementation has no redundancy. Semantic findings belong to the existing Evaluation. Existing changes and archived evidence are not rewritten. No separate Skill-version binding or historical review is introduced; existing manifest and source/planning fingerprint checks still apply to historical rechecks.
 
 ```mermaid
 flowchart LR
@@ -2589,6 +2811,8 @@ Within the same Evaluation attempt, review in two ordered stages named `specific
 `review_input` is generated from the frozen implementation base and binds effective, committed, staged, unstaged, untracked and dirty-gitlink layers with state fingerprints. `raw_diff_persisted` is always false: the Evaluator reads actual diffs transiently but never copies raw content into evidence. A changed index/worktree state makes an attempt stale even when the ordinary source fingerprint happens to be unchanged.
 
 Findings use `Critical | Important | Minor` and `Open | Resolved | Deferred`. Specification findings cannot be Minor; Critical/Important cannot be Deferred. Open Critical/Important findings force their stage to Fail. A Deferred Minor must reference a real technical-debt or residual-risk ID. Prior Open/Deferred findings must remain with the same identity until explicitly resolved. Every completed v2 report is copied to immutable `harness/evaluations/<evaluation-id>.json`; the top-level Evaluation verdict remains the only final verdict.
+
+Apply `.agents/skills/minimal-implementation/SKILL.md` during `code_quality`. Record evidenced redundancy in existing `change_review.findings` under `reuse`, `complexity` or `maintainability`, with the concrete location, redundancy basis, deletion or replacement and required behavior expressed in existing fields. Generator implements changes; Evaluator remains read-only. Minor + Open is invalid: resolve it with evidence or defer it against a real debt/risk record. Pure style preferences do not become Important to force a block; a change with no justified simplification may have no new finding. Do not add a separate verdict, report, compliance boolean or per-function table. The installation check does not certify semantic compliance or retroactively review historical evidence.
 EOF
 
     template_write docs/ai/check-rules.md 644 <<'EOF'
@@ -2710,10 +2934,12 @@ EOF
 # Planner prompt
 
 <!-- autoai:workflow-binding:v1
-{"role":"planner","facts":["planner-no-product-code","project-profile-command-ids","strict-plan-check"]}
+{"role":"planner","facts":["planner-no-product-code","project-profile-command-ids","strict-plan-check","minimal-implementation-skill"]}
 -->
 
 Create or revise only the active OpenSpec change. Before choosing a design, read the current main specs, the reviewed Project Profile, relevant source and callers, tests and fixtures, adapter-provided build graph and distribution surfaces, recent related changes and existing extension points. Decide whether the request is one independently acceptable capability; split unrelated subsystems into separate changes.
+
+Read and apply `.agents/skills/minimal-implementation/SKILL.md` before choosing an implementation. Trace actual callers and invariants, follow its implementation-choice order to investigate reusable capabilities, and identify the current justification for new abstractions, state, configuration and compatibility paths. Record those decisions in the existing design reuse decisions, structural allowances and obsolete-item dispositions; do not add a separate comparison report.
 
 Clarify one design-changing question at a time: goals, non-goals, constraints, success criteria and contract impact. Where real trade-offs exist, compare two or three feasible approaches across complexity, reuse, compatibility, migration, verification and rollback, then recommend one. Do not invent alternatives to meet a quota; if only one path is credible, record the conditions that make it so. Write the approved conclusions into proposal, complete delta requirements/scenarios, design and small traceable tasks. Do not edit product code or Evaluation.
 
@@ -2736,10 +2962,12 @@ EOF
 # Generator prompt
 
 <!-- autoai:workflow-binding:v1
-{"role":"generator","facts":["generator-direct-evidence","project-profile-command-ids","unplanned-surface-returns-planner"]}
+{"role":"generator","facts":["generator-direct-evidence","project-profile-command-ids","unplanned-surface-returns-planner","minimal-implementation-skill"]}
 -->
 
 Resume the explicit active change and implement one unchecked task at a time. Read its frozen Integration surface inventory and implement only the producer, consumer, entrypoint and compatibility work assigned to the selected task. You may edit approved product code and tests, and may update verification/footprint through managed scripts. You may not edit the design budget/classification/exceptions/surface inventory, write final Evaluation, or archive.
+
+Read and apply `.agents/skills/minimal-implementation/SKILL.md` before implementation. Check deletion and reuse opportunities, fix the shared root cause, and finish with its deletion review: implement justified simplifications and remove related obsolete paths while preserving required behavior. Put necessary explanations in the existing work summary and document real trade-offs and upgrade conditions using project comment conventions; do not add per-function tables, compliance booleans or a separate report.
 
 For each behavior task: recheck active and frozen planning/TDD/Integration baselines; search existing implementation, production callers, tests, fixtures and targets; then execute RED -> GREEN -> REFACTOR -> REGRESSION. Record a focused RED with `task_verify.sh <task> --phase red --cycle <id> ...`; confirm the nonzero exit and required output are the approved missing behavior rather than compilation, fixture or environment damage. RED is `ExpectedFailure`, never Pass. Implement only the smallest GREEN, record it with the same cycle/argv and unchanged focused test, refactor only while green, then record every declared REGRESSION kind.
 
@@ -2760,7 +2988,7 @@ EOF
 # Evaluator prompt
 
 <!-- autoai:workflow-binding:v1
-{"role":"evaluator","facts":["evaluator-independent-evidence","single-evaluator-verdict","project-profile-command-ids"]}
+{"role":"evaluator","facts":["evaluator-independent-evidence","single-evaluator-verdict","project-profile-command-ids","minimal-implementation-skill"]}
 -->
 
 Act independently from Generator. Before beginning an attempt, require a current `integration-surface-report.json`, then read the approved artifacts, verification evidence, full report and actual Git state. Review in two ordered stages:
@@ -2769,6 +2997,8 @@ Act independently from Generator. Before beginning an attempt, require a current
 2. Second perform code quality: correctness, safety, regression risk, reuse, complexity, assertion quality, every path/structural/AST candidate, and product/install/package/CI impact.
 
 Do not fix product code during this role.
+
+Read and apply `.agents/skills/minimal-implementation/SKILL.md` independently in `code_quality`, using the complete diff and actual consumers. Express evidenced redundancy through existing `change_review.findings` and economy assessments: identify the location, redundancy basis, concrete deletion or replacement, and behavior that must remain. Use existing reuse, complexity or maintainability categories and severity/status rules; style preferences alone do not block Pass, and no simplification finding is required when none is justified. Return implementation fixes to Generator; do not modify code while reviewing.
 
 Derive review input from the frozen implementation base, current source/artifact fingerprints, committed changes, staged changes, unstaged changes and untracked paths. Never inspect only BASE..HEAD or trust Generator's summary. Read every report candidate and confirm its exact diff path/symbol, producer mapping and real consumer. Raw diff is transient read-only input; do not copy it into archived evidence or logs. Run your own relevant build, test, behavior, compatibility and downstream-consumer commands with exact `--surface`/`--surface-role` bindings.
 
@@ -2950,9 +3180,11 @@ manifest_policy_content() {
 'use strict';
 const fs=require('fs'),path=require('path'),crypto=require('crypto'),cp=require('child_process');
 
+const minimalImplementationPaths=['.agents/skills/minimal-implementation/SKILL.md','.claude/skills/minimal-implementation/SKILL.md'];
 const templatePaths=[
   'PROJECT_ATTRIBUTION.md','CLAUDE.md','AGENTS.md','init.sh','.cursorrules',
   '.claude/settings.json','.claude/skills/full-code-review/SKILL.md',
+  '.agents/skills/minimal-implementation/SKILL.md','.claude/skills/minimal-implementation/SKILL.md',
   '.codex/skills/full-code-review/SKILL.md','.codex/skills/full-code-review/agents/openai.yaml',
   'docs/ai/openspec.md','docs/ai/implementation-economy.md','docs/ai/workflow.md',
   'docs/ai/evaluation.md','docs/ai/check-rules.md','docs/ai/quick-brief.md',
@@ -2980,6 +3212,7 @@ const templatePaths=[
   '.ai-harness/workflow-contract.json'
 ];
 const v2Only=new Set([
+  '.agents/skills/minimal-implementation/SKILL.md','.claude/skills/minimal-implementation/SKILL.md',
   'scripts/project_detect.sh','scripts/project_profile_lib.js','scripts/project_profile.sh',
   'scripts/project_command.js','scripts/project_command.sh',
   'scripts/workflow_contract_check.js','scripts/workflow_contract_check.sh',
@@ -3039,7 +3272,7 @@ function loadManifest(root=process.cwd(),options={}){
     if(current){
       const shouldHash=x.ownership==='template';
       if(shouldHash?!/^sha256:[0-9a-f]{64}$/.test(x.content_sha256||''):x.content_sha256!==null)throw Error('manifest content digest shape mismatch: '+x.path);
-      if(shouldHash&&options.verifyContent!==false){
+      if(shouldHash&&options.verifyContent!==false&&!(options.skipMinimalImplementationContent===true&&minimalImplementationPaths.includes(x.path))){
         const target=path.join(root,...x.path.split('/')),targetStat=fs.lstatSync(target);
         if(!targetStat.isFile()||targetStat.isSymbolicLink()||x.content_sha256!=='sha256:'+crypto.createHash('sha256').update(fs.readFileSync(target)).digest('hex'))throw Error('managed template content mismatch: '+x.path);
       }
@@ -3058,6 +3291,49 @@ function loadManifest(root=process.cwd(),options={}){
 const digest=b=>'sha256:'+crypto.createHash('sha256').update(b).digest('hex');
 const cmp=(a,b)=>Buffer.from(a).compare(Buffer.from(b));
 const canonical=v=>Array.isArray(v)?'['+v.map(canonical).join(',')+']':v&&typeof v==='object'?'{'+Object.keys(v).sort(cmp).map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}':JSON.stringify(v);
+function checkMinimalImplementation(root=process.cwd()){
+  let subject='.ai-harness/manifest.json';
+  try{
+    root=path.resolve(root);
+    const read=relative=>{
+      subject=relative;
+      const parts=relative.split('/');let target=root;
+      for(const [i,part]of parts.entries()){
+        target=path.join(target,part);const st=fs.lstatSync(target);
+        if(st.isSymbolicLink()||(i===parts.length-1?!st.isFile():!st.isDirectory()))throw Error('must use regular files and directory parents: '+parts.slice(0,i+1).join('/'));
+      }
+      return fs.readFileSync(target);
+    };
+    // Validate ancestry first; loadManifest checks ownership/version, this gate hashes the Skill.
+    read(subject);
+    const {manifest}=loadManifest(root,{allowTemplateUpgrade:true,verifyContent:false});
+    const skillPaths=minimalImplementationPaths;
+    const contents=skillPaths.map(relative=>{
+      const content=read(relative),frontmatter=content.toString('utf8').match(/^---\r?\nname: minimal-implementation\r?\ndescription: ([^\r\n]+)\r?\n---(?:\r?\n|$)/);
+      // The managed template uses an unquoted, single-line text description.
+      const description=frontmatter?.[1].split(/\s+#/)[0].trim();
+      if(!description||!/^\p{L}/u.test(description)||/^(?:null|true|false|yes|no|on|off)$/i.test(description))throw Error('expected minimal-implementation name and non-empty plain-text description frontmatter');
+      const entry=manifest.managed_paths.find(x=>x.path===relative);
+      if(!entry)throw Error('Skill is not registered as a managed template');
+      if(entry.content_sha256!==digest(content))throw Error('Skill content does not match manifest content_sha256');
+      return content;
+    });
+    if(!contents[0].equals(contents[1]))throw Error('Skill differs from '+skillPaths[0]);
+    const contractPath='.ai-harness/workflow-contract.json',contract=JSON.parse(read(contractPath).toString('utf8'));
+    if(!Array.isArray(contract.prompt_references))throw Error('prompt_references must be an array');
+    const references=[['AGENTS.md','control',skillPaths[0]],['CLAUDE.md','control',skillPaths[1]],['prompts/planner.md','planner',skillPaths[0]],['prompts/generator.md','generator',skillPaths[0]],['prompts/evaluator.md','evaluator',skillPaths[0]]];
+    for(const [relative,role,skill]of references){
+      const text=read(relative).toString('utf8'),matches=[...text.matchAll(/<!-- autoai:workflow-binding:v1\s*\n([^\n]+)\n-->/g)];
+      if(matches.length!==1)throw Error('exactly one workflow binding is required');
+      const binding=JSON.parse(matches[0][1]),refs=contract.prompt_references.filter(x=>x?.path===relative),ref=refs[0];
+      closed(binding,['role','facts'],'workflow binding');
+      if(refs.length!==1||ref.role!==role||binding.role!==role||!Array.isArray(binding.facts)||binding.facts.some(x=>typeof x!=='string')||new Set(binding.facts).size!==binding.facts.length||!binding.facts.includes('minimal-implementation-skill')||canonical(binding.facts)!==canonical(ref.facts))throw Error('structured binding drift: minimal-implementation-skill differs from '+contractPath);
+      if(!text.replace(matches[0][0],'').includes('Read and apply `'+skill+'`'))throw Error('missing explicit Skill read instruction: '+skill);
+    }
+  }catch(error){
+    throw Error(subject+': '+error.message+'; rerun setup_ai_harness.sh for initialization, or review local changes and use setup_ai_harness.sh --force to back up and update managed templates; resolve unmanaged conflicts first');
+  }
+}
 const safePattern=(value,label)=>{if(typeof value!=='string'||!value||path.posix.isAbsolute(value)||value.includes('\\')||value.includes('\0')||value.includes('\n')||value.includes('\r')||value.startsWith('!')||value.startsWith(':'))throw Error(label+' is not a safe repository path pattern');const probe=value.replace(/[?*]+/g,'x'),normal=path.posix.normalize(probe);if(normal==='..'||normal.startsWith('../')||normal==='.git'||normal.startsWith('.git/'))throw Error(label+' escapes or targets Git metadata');return value};
 const globPattern=value=>{safePattern(value,'glob pattern');let s='^';for(let i=0;i<value.length;i++){const c=value[i];if(c==='*'&&value[i+1]==='*'){const segmentStart=i===0||value[i-1]==='/';if(segmentStart&&value[i+2]==='/'){s+='(?:.*/)?';i+=2}else if(segmentStart&&i+2===value.length){s+='.*';i++}else{s+='[^/]*';i++}}else if(c==='*')s+='[^/]*';else if(c==='?')s+='[^/]';else s+='\\.^$+{}()|[]'.includes(c)?'\\'+c:c}return new RegExp(s+'$')};
 const matchesPattern=(value,patterns)=>{safePattern(value,'repository path');if(value.includes('*')||value.includes('?'))throw Error('repository path cannot be a glob');return patterns.some(p=>globPattern(p).test(value))};
@@ -3193,7 +3469,7 @@ function reviewInput(root,change,implementationBase,fingerprints){
   const tree=rev=>{const out=new Map;for(const row of nul(git(['ls-tree','-r','-z','--full-tree',rev]))){const m=row.match(/^(\d+) \w+ ([0-9a-f]+)\t([\s\S]+)$/);if(m)out.set(m[3],{mode:m[1],oid:m[2]})}return out},index=new Map;for(const row of nul(git(['ls-files','-s','-z']))){const m=row.match(/^(\d+) ([0-9a-f]+) \d+\t([\s\S]+)$/);if(m)index.set(m[3],{mode:m[1],oid:m[2]})}const baseTree=tree(implementationBase),headTree=tree(head),missing={mode:'000000',oid:'<deleted>'},work=p=>{const f=path.join(root,...p.split('/'));let st;try{st=fs.lstatSync(f)}catch(e){if(e.code==='ENOENT')return missing;throw e}if(st.isSymbolicLink()){if(!index.has(p))throw Error('untracked review path symlink: '+p);const target=fs.readlinkSync(f,'buffer');return {mode:'120000',oid:digest(Buffer.concat([Buffer.from('120000\0'),target]))}}if(st.isDirectory()){const idx=index.get(p);if(idx?.mode!=='160000')throw Error('unexpected review directory: '+p);const h=git(['-C',p,'rev-parse','HEAD'],'utf8').trim(),raw=git(['-C',p,'status','--porcelain=v1','-z']);return {mode:'160000',oid:h,status:digest(raw),dirty:raw.length>0}}if(!st.isFile())throw Error('unsupported review path: '+p);return {mode:(st.mode&0o111)?'100755':'100644',oid:digest(fs.readFileSync(f))}},makeLayer=(paths,before,after)=>{paths=safePaths(paths);const records=paths.map(p=>({path:p,before:before(p)||missing,after:after(p)||missing}));return {paths,state_fingerprint:digest(Buffer.from(canonical(records)))}};
   const committedPaths=nul(git(['diff','--no-renames','--name-only','-z',implementationBase,'HEAD','--'])),stagedPaths=nul(git(['diff','--cached','--no-renames','--name-only','-z','HEAD','--'])),unstagedPaths=nul(git(['diff','--no-renames','--name-only','-z','--'])),effectivePaths=nul(git(['diff','--no-renames','--name-only','-z',implementationBase,'--'])),committed=makeLayer(committedPaths,p=>baseTree.get(p),p=>headTree.get(p)),staged=makeLayer(stagedPaths,p=>headTree.get(p),p=>index.get(p)),unstaged=makeLayer(unstagedPaths,p=>index.get(p),work),effective=makeLayer(effectivePaths,p=>baseTree.get(p),work),untrackedPaths=safePaths(nul(git(['ls-files','--others','--exclude-standard','-z']))),untrackedRecords=untrackedPaths.map(p=>({path:p,after:work(p)})),untracked={paths:untrackedPaths,state_fingerprint:digest(Buffer.from(canonical(untrackedRecords)))},gitlinks=[];for(const [p,x]of index)if(x.mode==='160000'&&!excluded(p)){const w=work(p);if(w.dirty)gitlinks.push({path:p,state:w})}const dirty_gitlinks={paths:gitlinks.map(x=>x.path).sort(cmp),state_fingerprint:digest(Buffer.from(canonical(gitlinks)))},layers={effective,committed,staged,unstaged,untracked,dirty_gitlinks},reviewPaths=safePaths(Object.values(layers).flatMap(x=>x.paths));return {schema_version:1,implementation_base_commit:implementationBase,head_commit:head,source_fingerprint:fingerprints.source_fingerprint,artifact_fingerprint:fingerprints.artifact_fingerprint,base_specs_fingerprint:fingerprints.base_specs_fingerprint,layers,review_paths:reviewPaths,git_state_fingerprint:digest(Buffer.from(canonical(layers))),raw_diff_persisted:false};
 }
-module.exports={loadManifest,parseTaskContracts,parseTddPolicy,planningState,planningStateAt,validateProjectCommandEvidence,persistProjectCommandEvidence,verifyTddEvidence,verifyTddEvidenceAt,reviewInput,canonical,digest,safePattern,matchesPattern};
+module.exports={loadManifest,checkMinimalImplementation,parseTaskContracts,parseTddPolicy,planningState,planningStateAt,validateProjectCommandEvidence,persistProjectCommandEvidence,verifyTddEvidence,verifyTddEvidenceAt,reviewInput,canonical,digest,safePattern,matchesPattern};
 if(require.main===module){try{const upgrade=process.env.AUTOAI_MANIFEST_ALLOW_TEMPLATE_UPGRADE==='1',result=loadManifest(process.cwd(),{allowTemplateUpgrade:upgrade});if(process.env.AUTOAI_MANIFEST_PRINT_UPGRADE_PATHS==='1')process.stdout.write(result.missing_managed_paths.join('\n')+(result.missing_managed_paths.length?'\n':''));else console.log('Manifest policy passed.')}catch(e){console.error('[ERR] '+e.message);process.exit(6)}}
 EOF
 }
@@ -3235,6 +3511,14 @@ HARNESS_OWNED_LOCK=0
 HARNESS_OWNED_TOKEN=
 HARNESS_EFFECTIVE_PURPOSE=
 HARNESS_EFFECTIVE_CHANGE=
+
+harness_require_minimal_implementation() {
+    node - "$HARNESS_REPO_ROOT" <<'NODE'
+const root=process.argv[2];
+try { require(root+'/scripts/manifest_policy.js').checkMinimalImplementation(root); }
+catch (error) { console.error('[ERR] minimal-implementation: '+error.message); process.exit(6); }
+NODE
+}
 
 harness_assert_repo_path() {
     local relative=${1:?relative path required} kind=${2:?path kind required}
@@ -3617,6 +3901,8 @@ EOF
     template_write scripts/openspec_preflight.sh 755 <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+harness_openspec_preflight() (
+local context=${1:-normal}
 top=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "[ERR] Git repository required" >&2; exit 3; }
 [[ "$(CDPATH= cd -- "$top" && pwd -P)" == "$(pwd -P)" ]] || { echo "[ERR] run from repository root" >&2; exit 3; }
 for tool in node npm npx; do command -v "$tool" >/dev/null 2>&1 || { echo "[ERR] missing $tool" >&2; exit 3; }; done
@@ -3642,8 +3928,18 @@ schema=$(awk '
 [[ "$schema" == spec-driven ]] || { echo "[ERR] unsupported schema: $schema" >&2; exit 4; }
 if find .claude .codex -mindepth 1 \( -name 'openspec-*' -o -name 'opsx' -o -name 'opsx-*' \) -print -quit 2>/dev/null | grep -q .; then echo "[ERR] unsupported OpenSpec /opsx agent assets detected" >&2; exit 4; fi
 [[ -f scripts/manifest_policy.js ]] || { echo "[ERR] missing manifest policy" >&2; exit 4; }
-node scripts/manifest_policy.js >/dev/null || { echo "[ERR] managed-path manifest is invalid" >&2; exit 4; }
+node - "$context" <<'NODE' || { echo "[ERR] managed-path manifest is invalid" >&2; exit 4; }
+try {
+  require(process.cwd()+'/scripts/manifest_policy.js').loadManifest(process.cwd(),{
+    allowTemplateUpgrade:process.env.AUTOAI_MANIFEST_ALLOW_TEMPLATE_UPGRADE==='1',
+    skipMinimalImplementationContent:process.argv[2]==='archive-recovery'
+  });
+} catch(error) { console.error('[ERR] '+error.message); process.exit(4); }
+NODE
 echo "OpenSpec preflight passed."
+)
+# Public invocation always checks every managed template; recovery calls the function directly.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then harness_openspec_preflight; fi
 EOF
 }
 
@@ -4255,11 +4551,11 @@ EOF
     "scripts/evaluator_check.sh"
   ],
   "prompt_references": [
-    {"path": "CLAUDE.md", "role": "control", "facts": ["openspec-only-planning", "single-active-selector", "single-evaluator-verdict", "project-profile-command-ids"]},
-    {"path": "AGENTS.md", "role": "control", "facts": ["generator-direct-evidence", "evaluator-independent-evidence", "single-evaluator-verdict", "project-profile-command-ids"]},
-    {"path": "prompts/planner.md", "role": "planner", "facts": ["planner-no-product-code", "project-profile-command-ids", "strict-plan-check"]},
-    {"path": "prompts/generator.md", "role": "generator", "facts": ["generator-direct-evidence", "project-profile-command-ids", "unplanned-surface-returns-planner"]},
-    {"path": "prompts/evaluator.md", "role": "evaluator", "facts": ["evaluator-independent-evidence", "single-evaluator-verdict", "project-profile-command-ids"]},
+    {"path": "CLAUDE.md", "role": "control", "facts": ["openspec-only-planning", "single-active-selector", "single-evaluator-verdict", "project-profile-command-ids", "minimal-implementation-skill"]},
+    {"path": "AGENTS.md", "role": "control", "facts": ["generator-direct-evidence", "evaluator-independent-evidence", "single-evaluator-verdict", "project-profile-command-ids", "minimal-implementation-skill"]},
+    {"path": "prompts/planner.md", "role": "planner", "facts": ["planner-no-product-code", "project-profile-command-ids", "strict-plan-check", "minimal-implementation-skill"]},
+    {"path": "prompts/generator.md", "role": "generator", "facts": ["generator-direct-evidence", "project-profile-command-ids", "unplanned-surface-returns-planner", "minimal-implementation-skill"]},
+    {"path": "prompts/evaluator.md", "role": "evaluator", "facts": ["evaluator-independent-evidence", "single-evaluator-verdict", "project-profile-command-ids", "minimal-implementation-skill"]},
     {"path": "prompts/archive.md", "role": "archive", "facts": ["archive-wrapper-only", "archive-fail-closed"]}
   ],
   "documentation_references": [
@@ -4275,6 +4571,7 @@ const fs=require('fs'),path=require('path'),crypto=require('crypto'),cp=require(
 const profileLib=require('./project_profile_lib.js');
 const root=process.cwd(),json=process.argv.includes('--json'),own=(o,k)=>Object.prototype.hasOwnProperty.call(o,k);
 try{
+  require('./manifest_policy.js').checkMinimalImplementation(root);
   const file=path.join(root,'.ai-harness','workflow-contract.json'),st=fs.lstatSync(file);
   if(!st.isFile()||st.isSymbolicLink())throw Error('workflow contract must be a non-symlink regular file');
   const d=profileLib.parseJsonStrict(fs.readFileSync(file,'utf8'),'workflow contract');
@@ -4363,6 +4660,7 @@ try{
     'single-active-selector':/ai_snapshot\.json` is the only active-change selector/,
     'single-evaluator-verdict':/(?:one change-local Evaluation verdict|never creates a second verdict|only verdict|only final result)/,
     'project-profile-command-ids':/--project-command(?: <command-id>)?/,
+    'minimal-implementation-skill':/Read and apply `\.(?:agents|claude)\/skills\/minimal-implementation\/SKILL\.md`/,
     'generator-direct-evidence':/task_verify\.sh/,
     'evaluator-independent-evidence':/evaluator_check\.sh --run/,
     'planner-no-product-code':/Do not edit product code/,
@@ -4498,6 +4796,7 @@ check('control.openspec.wrapper','control',()=>{
   return 'pinned wrapper present; Doctor did not execute npx';
 });
 check('control.manifest','control',()=>{require('./manifest_policy.js').loadManifest(root);return 'managed manifest and template contents are valid'});
+check('control.minimal-implementation','control',()=>{require('./manifest_policy.js').checkMinimalImplementation(root);return 'minimal-implementation files and role bindings are valid; code semantics require independent review'},'error','Run the original setup command, or use --force to update managed templates with backups.');
 check('control.workflow-contract','control',()=>{cp.execFileSync(path.join(root,'scripts','workflow_contract_check.sh'),[],{cwd:root,stdio:'pipe'});return 'workflow contract parity passed'});
 check('control.profile.schema','profile',()=>{
   loaded=lib.parseProfile(root,path.join(root,'.ai-harness','project-profile.json'));
@@ -5391,6 +5690,7 @@ if [[ -n "$active" ]]; then isolation_status=$(harness_isolation_node status "$a
 if [[ -n "$active" && ( -n "$phase" || -n "$current" || -n "$next" || "$freeze_plan" -eq 1 || "$refresh_plan" -eq 1 || "$freeze_implementation" -eq 1 || "${#adopted[@]}" -gt 0 ) ]]; then
   local_snapshot="openspec/changes/$active/harness/ai_snapshot.json"; [[ -f "$local_snapshot" && ! -L "$local_snapshot" ]] || { echo "[ERR] local snapshot missing" >&2; exit 6; }
   snapshot_version=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).schema_version" "$local_snapshot"); [[ "$snapshot_version" == 2 || "$snapshot_version" == 3 || "$snapshot_version" == 4 ]] || { echo '[ERR] unsupported local snapshot schema' >&2; exit 6; }
+  if [[ "$freeze_plan" -eq 1 || "$refresh_plan" -eq 1 || "$freeze_implementation" -eq 1 ]]; then harness_require_minimal_implementation; fi
   planned=; planned_change=; planned_policy=; planned_integration=; implementation=; current_base=$(scripts/source_fingerprint.sh --kind base-specs --change "$active")
   if [[ "$snapshot_version" == 3 || "$snapshot_version" == 4 ]]; then
     planning_json=$(scripts/source_fingerprint.sh --kind planning --change "$active" --json) || { echo '[ERR] canonical TDD/integration policy or planning artifacts are invalid' >&2; exit 6; }
@@ -5451,6 +5751,8 @@ EOF
 set -euo pipefail
 scripts/attribution_check.sh --quiet || { echo '[ERR] project attribution contract is invalid; repair it before resuming managed work' >&2; exit 6; }
 source "$(dirname "$0")/harness_lock.sh"; harness_lock_acquire resume ""; active=$(harness_active_optional); [[ -z "$active" ]] || harness_lock_bind_change "$active"
+harness_require_minimal_implementation
+echo 'Read and apply .agents/skills/minimal-implementation/SKILL.md before continuing managed work.'
 if [[ -z "$active" ]]; then echo 'No active change. Select or create one explicitly.'; exit 0; fi
 harness_validate_change_id "$active"; [[ -d "openspec/changes/$active" && ! -L "openspec/changes/$active" ]] || { echo "[ERR] stale or archived active pointer: $active; inspect then clear explicitly" >&2; exit 4; }
 dynamic=$(mktemp "${TMPDIR:-/tmp}/autoai-resume.XXXXXX"); trap 'rm -f -- "$dynamic"; harness_lock_release' EXIT
@@ -8424,6 +8726,7 @@ source "$(dirname "$0")/harness_lock.sh"
 scripts/attribution_check.sh --quiet || { echo '[ERR] project attribution contract is invalid; task evidence is blocked' >&2; exit 6; }
 if [[ "${1:-}" == --upgrade-v2 ]]; then
   [[ $# -eq 2 ]] || { echo "usage: $0 --upgrade-v2 <active-change>" >&2; exit 2; }; change=$2; harness_validate_change_id "$change"; harness_lock_acquire task-verify-upgrade "$change"; harness_require_no_archive_failure; [[ "$(harness_resolve_change "$change")" == "$change" ]]; harness_lock_bind_change "$change"
+  harness_require_minimal_implementation
   dir="openspec/changes/$change/harness"; verification="$dir/verification.json"; snapshot="$dir/ai_snapshot.json"; baseline="$dir/evaluation-baseline.json"; [[ -f "$verification" && ! -L "$verification" && -f "$snapshot" && ! -L "$snapshot" ]] || { echo '[ERR] unsafe legacy evidence' >&2; exit 6; }
   if [[ -f "$baseline" && ! -L "$baseline" && "$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).status" "$baseline")" == in_progress ]]; then echo '[ERR] abort the in-progress Evaluation before evidence upgrade' >&2; exit 6; fi
   node - "$verification" "$snapshot" "$change" <<'NODE' || { echo '[ERR] v1 evidence upgrade failed; any half state remains fail-closed' >&2; exit 6; }
@@ -8435,6 +8738,7 @@ fi
 if [[ "${1:-}" == --upgrade-v3 ]]; then
   [[ $# -eq 2 ]] || { echo "usage: $0 --upgrade-v3 <active-change>" >&2; exit 2; }
   change=$2; harness_validate_change_id "$change"; harness_lock_acquire upgrade-v3 "$change"; harness_require_no_archive_failure; [[ "$(harness_resolve_change "$change")" == "$change" ]]; harness_lock_bind_change "$change"
+  harness_require_minimal_implementation
   dir="openspec/changes/$change/harness"; verification="$dir/verification.json"; snapshot="$dir/ai_snapshot.json"; journal="$dir/integration-upgrade-v3.json"
   for f in "$verification" "$snapshot"; do [[ -f "$f" && ! -L "$f" ]] || { echo '[ERR] unsafe evidence upgrade source' >&2; exit 6; }; done
   for f in "$dir/evaluation-baseline.json" "$dir/evaluation-command-ledger.json" "$dir/evaluation.json" "$dir/evaluations" "$dir/integration-surface-report.json"; do [[ ! -e "$f" && ! -L "$f" ]] || { echo '[ERR] v3 upgrade requires no Evaluation history or surface report' >&2; exit 6; }; done
@@ -8459,6 +8763,7 @@ NODE
 fi
 if [[ "${1:-}" == --complete ]]; then
   [[ $# -eq 2 && "$2" =~ ^[0-9]+(\.[0-9]+)*$ ]] || { echo "usage: $0 --complete <task-id>" >&2; exit 2; }; task_id=$2; harness_lock_acquire task-verify-complete ""; harness_require_no_archive_failure; change=$(harness_resolve_change); harness_lock_bind_change "$change"; tasks="openspec/changes/$change/tasks.md"; [[ -f "$tasks" && ! -L "$tasks" ]] || exit 6
+  harness_require_minimal_implementation
   harness_verification_workspace_control cleanup "$change" || { echo '[ERR] temporary verification program cleanup failed; task remains unchecked' >&2; exit 6; }
   harness_verification_workspace_control assert-clean "$change" || { echo '[ERR] temporary verification workspace is not clean; task remains unchecked' >&2; exit 6; }
   node - "$change" "$task_id" "$tasks" <<'NODE' || { echo '[ERR] task TDD closure is incomplete; checkbox unchanged' >&2; exit 6; }
@@ -8485,6 +8790,7 @@ if printf '%s\0' "$@" | grep -zFxq -- --phase; then
   for pair in "${surface_pairs[@]}"; do [[ "$pair" =~ ^surface-[a-z0-9]+(-[a-z0-9]+)*=(current|old_consumer|replacement_consumer|absence_probe)$ ]] || { echo "[ERR] invalid surface role: $pair" >&2; exit 2; }; done
   for arg in "$@" "$drift_reason" "$expected_failure" "$match_output" "$observed"; do case "$arg" in --token|--password|--secret|--api-key|--apikey|-H|--header|--cookie) echo '[ERR] credential-bearing evidence is forbidden' >&2; exit 2 ;; esac; [[ "$arg" != *AUTOAI_VERIFY_TMPDIR* && "$arg" != *'.ai-harness/logs/verification-workspaces'* ]] || { echo '[ERR] evidence cannot depend on a temporary verification workspace path; invoke verification_workspace.sh with a durable driver' >&2; exit 2; }; [[ ! "$arg" =~ ([Aa]uthorization|[Bb]earer|[Aa][Pp][Ii][_-]?[Kk]ey|[Tt]oken|[Pp]assword|[Ss]ecret|[Cc]ookie)[[:space:]:=]+[^[:space:]] ]] || { echo '[ERR] possible secret in evidence' >&2; exit 2; }; done
   harness_lock_acquire task-verify ""; harness_require_no_archive_failure; change=$(harness_resolve_change); harness_lock_bind_change "$change"
+  harness_require_minimal_implementation
   if [[ -n "$project_command" ]]; then set -- scripts/project_command.sh "$project_command" --change "$change" --json; fi
   AUTOAI_LOCK_TOKEN="$HARNESS_OWNED_TOKEN" AUTOAI_PARENT_PURPOSE=task-verify scripts/change_footprint.sh "$change" --check --json >/dev/null
   dir="openspec/changes/$change/harness"; verification="$dir/verification.json"; markdown="$dir/verification.md"; footprint="$dir/change-footprint.json"; snapshot="$dir/ai_snapshot.json"; tasks="openspec/changes/$change/tasks.md"; [[ -f "$verification" && ! -L "$verification" && -f "$markdown" && ! -L "$markdown" && -f "$snapshot" && ! -L "$snapshot" ]] || exit 6
@@ -8507,6 +8813,7 @@ NODE
   set +e; harness_run_evidence_command "$change" "$@" >"$output" 2>&1; actual=$?; set -e; cat "$output"
   harness_verification_workspace_control cleanup "$change" || { echo '[ERR] temporary verification program cleanup failed; command evidence was not recorded' >&2; exit 6; }
   harness_verification_workspace_control assert-clean "$change" || { echo '[ERR] temporary verification workspace is not clean; command evidence was not recorded' >&2; exit 6; }
+  harness_require_minimal_implementation
   node - "$output" "$surface_meta" "$project_command" <<'NODE' || { echo '[ERR] command output did not satisfy the approved surface probe marker' >&2; exit 1; }
 const fs=require('fs'),[outputFile,surfaceFile,projectCommand]=process.argv.slice(2),surface=JSON.parse(fs.readFileSync(surfaceFile));let output;if(projectCommand){const envelope=JSON.parse(fs.readFileSync(outputFile,'utf8'));output=Buffer.concat([Buffer.from(envelope.stdout),Buffer.from([0]),Buffer.from(envelope.stderr)])}else output=fs.readFileSync(outputFile);if(!Array.isArray(surface.required_output_contains)||surface.required_output_contains.some(marker=>typeof marker!=='string'||!marker||output.indexOf(Buffer.from(marker))<0))process.exit(1);
 NODE
@@ -8551,6 +8858,7 @@ for arg in "$@"; do
   [[ "$arg" != *AUTOAI_VERIFY_TMPDIR* && "$arg" != *'.ai-harness/logs/verification-workspaces'* ]] || { echo '[ERR] evidence cannot depend on a temporary verification workspace path' >&2; exit 2; }
 done
 harness_lock_acquire task-verify ""; harness_require_no_archive_failure; change=$(harness_resolve_change); harness_lock_bind_change "$change"
+harness_require_minimal_implementation
 if [[ -n "$project_command" ]]; then set -- scripts/project_command.sh "$project_command" --change "$change" --json; fi
 verification="openspec/changes/$change/harness/verification.json"; [[ -f "$verification" && ! -L "$verification" ]] || { echo '[ERR] unsafe verification evidence path' >&2; exit 6; }
 verification_schema=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).schema_version" "$verification" 2>/dev/null || true)
@@ -8569,6 +8877,7 @@ NODE
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ); set +e; harness_run_evidence_command "$change" "$@"; actual=$?; set -e
 harness_verification_workspace_control cleanup "$change" || { echo '[ERR] temporary verification program cleanup failed; command evidence was not recorded' >&2; exit 6; }
 harness_verification_workspace_control assert-clean "$change" || { echo '[ERR] temporary verification workspace is not clean; command evidence was not recorded' >&2; exit 6; }
+harness_require_minimal_implementation
 finished=$(date -u +%Y-%m-%dT%H:%M:%SZ); result=Fail; IFS=, read -r -a codes <<< "$expected"; for c in "${codes[@]}"; do [[ "$actual" -eq "$c" ]] && result=Pass; done
 markdown="openspec/changes/$change/harness/verification.md"; [[ -f "$markdown" && ! -L "$markdown" ]] || { echo '[ERR] unsafe verification Markdown path' >&2; exit 6; }
 node - "$verification" "$meta" "$argv_file" "$change" "$task_id" "$kind" "$expected" "$actual" "$result" "$started" "$finished" "$status" "$drift_reason" "${paths[@]}" <<'NODE'
@@ -8603,6 +8912,7 @@ if [[ "${1:-}" == --run ]]; then
   for pair in "${surface_pairs[@]}"; do [[ "$pair" =~ ^surface-[a-z0-9]+(-[a-z0-9]+)*=(current|old_consumer|replacement_consumer|absence_probe)$ ]] || { echo "[ERR] invalid surface role: $pair" >&2; exit 2; }; done
   for arg in "$@" "$expected_text" "$observed"; do case "$arg" in --token|--password|--secret|--api-key|--apikey|-H|--header|--cookie) echo '[ERR] credential-bearing Evaluation evidence is forbidden' >&2; exit 2 ;; esac; [[ "$arg" != *AUTOAI_VERIFY_TMPDIR* && "$arg" != *'.ai-harness/logs/verification-workspaces'* ]] || { echo '[ERR] Evaluation evidence cannot depend on a temporary verification workspace path; invoke verification_workspace.sh with a durable driver' >&2; exit 2; }; [[ ! "$arg" =~ ([Aa]uthorization|[Bb]earer|[Aa][Pp][Ii][_-]?[Kk]ey|[Tt]oken|[Pp]assword|[Ss]ecret|[Cc]ookie)[[:space:]:=]+[^[:space:]] ]] || { echo '[ERR] possible secret in Evaluation evidence' >&2; exit 2; }; done
   harness_lock_acquire evaluation-run ""; harness_require_no_archive_failure; change=$(harness_resolve_change); harness_lock_bind_change "$change"
+  harness_require_minimal_implementation
   if [[ -n "$project_command" ]]; then set -- scripts/project_command.sh "$project_command" --change "$change" --json; fi
   harness_verification_workspace_control cleanup "$change" || { echo '[ERR] stale temporary verification programs could not be cleaned before Evaluation command' >&2; exit 6; }
   harness_verification_workspace_control assert-clean "$change" || { echo '[ERR] Evaluation command requires an empty temporary verification workspace' >&2; exit 6; }
@@ -8615,6 +8925,7 @@ NODE
   set +e; harness_run_evidence_command "$change" "$@" >"$output" 2>&1; actual=$?; set -e; cat "$output"
   harness_verification_workspace_control cleanup "$change" || { echo '[ERR] temporary verification program cleanup failed; Evaluation evidence was not recorded' >&2; exit 6; }
   harness_verification_workspace_control assert-clean "$change" || { echo '[ERR] temporary verification workspace is not clean; Evaluation evidence was not recorded' >&2; exit 6; }
+  harness_require_minimal_implementation
   node - "$output" "$surface_meta" "$project_command" <<'NODE' || { echo '[ERR] Evaluation output did not satisfy the approved surface probe marker' >&2; exit 1; }
 const fs=require('fs'),[outputFile,surfaceFile,projectCommand]=process.argv.slice(2),surface=JSON.parse(fs.readFileSync(surfaceFile));let output;if(projectCommand){const envelope=JSON.parse(fs.readFileSync(outputFile,'utf8'));output=Buffer.concat([Buffer.from(envelope.stdout),Buffer.from([0]),Buffer.from(envelope.stderr)])}else output=fs.readFileSync(outputFile);if(!Array.isArray(surface.required_output_contains)||surface.required_output_contains.some(marker=>typeof marker!=='string'||!marker||output.indexOf(Buffer.from(marker))<0))process.exit(1);
 NODE
@@ -8660,6 +8971,9 @@ if [[ "$action" != --plan && -f "$baseline" ]]; then
   node - "$baseline" "$change" "$action" <<'NODE' || { echo '[ERR] evaluation baseline closed schema is invalid' >&2; exit 6; }
 const fs=require('fs');const [file,change,action]=process.argv.slice(2),d=JSON.parse(fs.readFileSync(file)),own=(o,k)=>Object.prototype.hasOwnProperty.call(o,k),limit=Date.now()+300000,validTime=v=>Number.isFinite(Date.parse(v))&&Date.parse(v)<=limit,base=['schema_version','evaluation_id','change_name','status','started_at','source_fingerprint','artifact_fingerprint','base_specs_fingerprint','verification_json_sha256','budget_block_sha256','change_footprint_json_sha256'],integration=['integration_planning_block_sha256','integration_surface_report_sha256','integration_discovery_identity_sha256'],common=d.schema_version===3?[...base,...integration,'review_input']:d.schema_version===2?[...base,'review_input']:d.schema_version===1?base:null,extra=d.status==='complete'?['completed_at','evaluation_json_sha256']:d.status==='aborted'?['aborted_at','reason']:d.status==='in_progress'?[]:null,digest=v=>typeof v==='string'&&/^sha256:[0-9a-f]{64}$/.test(v);if(!common||!extra)process.exit(1);const keys=[...common,...extra],digestKeys=['source_fingerprint','artifact_fingerprint','base_specs_fingerprint','verification_json_sha256','budget_block_sha256','change_footprint_json_sha256',...(d.schema_version===3?integration:[])];if(!d||typeof d!=='object'||Array.isArray(d)||Object.keys(d).length!==keys.length||keys.some(k=>!own(d,k))||d.change_name!==change||typeof d.evaluation_id!=='string'||!/^eval-\d{8}T\d{6}Z-[0-9a-f]{6}$/.test(d.evaluation_id)||!validTime(d.started_at)||!digestKeys.every(k=>digest(d[k]))||d.schema_version>=2&&(!d.review_input||typeof d.review_input!=='object'||Array.isArray(d.review_input)))process.exit(1);if(d.status==='complete'&&(!validTime(d.completed_at)||Date.parse(d.completed_at)<Date.parse(d.started_at)||!digest(d.evaluation_json_sha256)))process.exit(1);if(d.status==='aborted'&&(!validTime(d.aborted_at)||Date.parse(d.aborted_at)<Date.parse(d.started_at)||typeof d.reason!=='string'||!d.reason.trim()||/[\r\n]/.test(d.reason)))process.exit(1);
 NODE
+fi
+if [[ "$action" == --begin || "$action" == --finish && ( ! -f "$baseline" || "$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1])).status" "$baseline")" != complete ) ]]; then
+  harness_require_minimal_implementation
 fi
 digest(){ [[ -f "$1" ]] || return 1; printf 'sha256:%s\n' "$(sha256sum -- "$1"|awk '{print $1}')"; }
 seal_evaluation_terminal() {
@@ -8930,6 +9244,7 @@ set -euo pipefail
 source "$(dirname "$0")/harness_lock.sh"
 [[ $# -le 1 ]] || exit 2; requested=${1:-}; [[ -z "$requested" ]] || harness_validate_change_id "$requested"; harness_lock_acquire archive "$requested"; harness_require_no_archive_failure; change=$(harness_resolve_change "$requested"); harness_lock_bind_change "$change"; source_dir="openspec/changes/$change"; [[ -d "$source_dir" && ! -L "$source_dir" ]] || { echo '[ERR] active change is stale or archived' >&2; exit 4; }
 scripts/attribution_check.sh --quiet || { echo '[ERR] project attribution contract is invalid; archive was not invoked' >&2; exit 6; }
+harness_require_minimal_implementation
 harness_verification_workspace_control cleanup "$change" || { echo '[ERR] temporary verification program cleanup failed; archive was not invoked' >&2; exit 6; }
 harness_verification_workspace_control assert-clean "$change" || { echo '[ERR] temporary verification workspace is not clean; archive was not invoked' >&2; exit 6; }
 harness_prepare_runtime_dir logs || { echo '[ERR] unsafe archive log directory' >&2; exit 4; }; stamp=$(date -u +%Y%m%dT%H%M%SZ); target="openspec/changes/archive/$(date -u +%Y-%m-%d)-$change"; log=$(mktemp ".ai-harness/logs/archive-$change-$stamp.XXXXXX.log"); transaction=.ai-harness/archive-transaction.json; exec 3>>"$log"
@@ -9075,7 +9390,7 @@ const digest=p=>'sha256:'+crypto.createHash('sha256').update(fs.readFileSync(p))
 const validPreparedTransaction=()=>{try{
   if(!transaction)return false;
   const raw=fs.readFileSync(transactionFile),parsed=JSON.parse(raw),keys=['schema_version','transaction_id','change_name','status','prepared_at','completed_at','target_path','log_path','root_snapshot_sha256','fingerprints','evidence_sha256'];
-  closed(parsed,keys,'archive transaction');closed(parsed.fingerprints,['source_fingerprint','artifact_fingerprint','base_specs_fingerprint'],'archive transaction fingerprints');
+  closed(parsed,keys,'archive transaction');closed(parsed.fingerprints,['source_fingerprint','artifact_fingerprint','base_specs_fingerprint',...(Object.prototype.hasOwnProperty.call(parsed.fingerprints,'profile_sha256')?['profile_sha256']:[])],'archive transaction fingerprints');
   if(!raw.equals(Buffer.from(JSON.stringify(parsed,null,2)+'\n'))||parsed.schema_version!==1||!/^archive-txn-[0-9a-f]{24}$/.test(parsed.transaction_id)||parsed.change_name!==f.change||parsed.status!=='prepared'||!Number.isFinite(Date.parse(parsed.prepared_at))||parsed.completed_at!==null||parsed.target_path!==loc.utc_archive.path||parsed.log_path!==f.log_path||![parsed.root_snapshot_sha256,parsed.evidence_sha256,parsed.fingerprints.source_fingerprint,parsed.fingerprints.artifact_fingerprint,parsed.fingerprints.base_specs_fingerprint].every(x=>digestPattern.test(x))||parsed.fingerprints.profile_sha256!==undefined&&!digestPattern.test(parsed.fingerprints.profile_sha256))return false;
   transaction=parsed;return true;
 }catch{return false}};
@@ -9163,7 +9478,8 @@ assert_inspected_log_path "$state_before" || { echo '[ERR] archive log path has 
 node - "$state_before" <<'NODE' || { echo '[ERR] current archive recovery state is ambiguous; inspect --status and repair manually' >&2; exit 6; }
 const fs=require('fs'),x=JSON.parse(fs.readFileSync(process.argv[2]));if(!x.unresolved||x.eligible!==true||!['source-retained','archived'].includes(x.current_state))process.exit(1);
 NODE
-scripts/openspec_preflight.sh >/dev/null || { echo '[ERR] fixed OpenSpec preflight failed' >&2; exit 6; }
+source scripts/openspec_preflight.sh
+harness_openspec_preflight archive-recovery >/dev/null || { echo '[ERR] fixed OpenSpec preflight failed' >&2; exit 6; }
 base_before=$(scripts/source_fingerprint.sh --kind base-specs)
 scripts/openspec_cli.sh validate --specs --strict --json --no-interactive > "$validation" || { echo '[ERR] strict main specs validation failed; archive_failure remains set' >&2; exit 6; }
 node - "$validation" <<'NODE' || { echo '[ERR] strict main specs validation JSON contains errors; archive_failure remains set' >&2; exit 6; }
@@ -9332,6 +9648,8 @@ init.sh
 .vscode/extensions.json
 .claude/settings.json
 .claude/skills/full-code-review/SKILL.md
+.agents/skills/minimal-implementation/SKILL.md
+.claude/skills/minimal-implementation/SKILL.md
 .codex/skills/full-code-review/SKILL.md
 .codex/skills/full-code-review/agents/openai.yaml
 docs/ai/openspec.md
